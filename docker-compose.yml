@@ -1,0 +1,202 @@
+# CineBot local stack — `make dev` spins this up end-to-end.
+# Named volumes persist data across restarts; `make clean` wipes them.
+
+name: cinebot
+
+x-api-env: &api-env
+  env_file: .env
+  environment:
+    PYTHONUNBUFFERED: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  # ── Data stores ───────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cinebot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cinebot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinebot_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cinebot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/docker/init-pgvector.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cinebot-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── LLM backend (optional; only needed when LLM_PROVIDER=ollama) ─
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cinebot-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    profiles: ["ollama", "all"]
+
+  # ── Application ──────────────────────────────────────────
+  api:
+    <<: *api-env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: cinebot-api
+    restart: unless-stopped
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./ml:/app/ml
+      - api-cache:/root/.cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  celery-worker:
+    <<: *api-env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: cinebot-worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=INFO --concurrency=4
+    volumes:
+      - ./backend/app:/app/app
+      - ./ml:/app/ml
+      - api-cache:/root/.cache
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  celery-beat:
+    <<: *api-env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: cinebot-beat
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=INFO
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── Frontend ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    container_name: cinebot-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+      VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-ws://localhost:8000}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+    depends_on:
+      - api
+
+  # ── Observability ────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.2
+    container_name: cinebot-mlflow
+    restart: unless-stopped
+    command: >
+      mlflow server
+      --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: cinebot-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: cinebot-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres-data:
+  redis-data:
+  ollama-data:
+  api-cache:
+  mlflow-data:
+  prometheus-data:
+  grafana-data:
