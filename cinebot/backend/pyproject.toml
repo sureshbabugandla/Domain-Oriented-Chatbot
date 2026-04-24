@@ -1,0 +1,129 @@
+[project]
+name = "cinebot-backend"
+version = "0.1.0"
+description = "Conversational movie recommender — API, NLP, recommender."
+requires-python = ">=3.11,<3.13"
+readme = "../README.md"
+license = { text = "MIT" }
+
+dependencies = [
+  # Web
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.6",
+  "gunicorn>=23.0.0",
+  "websockets>=13.0",
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.5.2",
+  "python-multipart>=0.0.10",
+
+  # Auth
+  "python-jose[cryptography]>=3.3.0",
+  "passlib[bcrypt]>=1.7.4",
+
+  # DB
+  "sqlalchemy[asyncio]>=2.0.35",
+  "asyncpg>=0.29.0",
+  "psycopg2-binary>=2.9.9",
+  "alembic>=1.13.3",
+  "pgvector>=0.3.3",
+
+  # Cache + queue
+  "redis>=5.1.0",
+  "celery[redis]>=5.4.0",
+
+  # NLP / ML
+  "spacy>=3.7.6",
+  "transformers>=4.45.0",
+  "torch>=2.4.1",
+  "sentence-transformers>=3.1.1",
+  "scikit-learn>=1.5.2",
+  "numpy>=1.26.4",
+
+  # LLM orchestration
+  "langchain>=0.3.1",
+  "langchain-openai>=0.2.1",
+  "langchain-community>=0.3.1",
+  "openai>=1.50.0",
+  "ollama>=0.3.3",
+  "tenacity>=9.0.0",
+
+  # Observability
+  "prometheus-client>=0.21.0",
+  "structlog>=24.4.0",
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+  "sentry-sdk[fastapi]>=2.14.0",
+  "mlflow>=2.16.2",
+
+  # HTTP clients
+  "httpx>=0.27.2",
+  "tmdbsimple>=2.9.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.3",
+  "pytest-asyncio>=0.24.0",
+  "pytest-cov>=5.0.0",
+  "pytest-mock>=3.14.0",
+  "testcontainers[postgres,redis]>=4.8.1",
+  "httpx>=0.27.2",
+  "factory-boy>=3.3.1",
+  "faker>=30.1.0",
+  "locust>=2.31.6",
+  "ruff>=0.6.9",
+  "black>=24.8.0",
+  "mypy>=1.11.2",
+  "types-redis",
+  "pip-audit>=2.7.3",
+]
+
+# ── Tooling ─────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "S", "A", "C4", "T20"]
+ignore = ["S101", "B008"]  # allow asserts in tests; Depends() in defaults
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["transformers.*", "sentence_transformers.*", "spacy.*", "tmdbsimple.*", "ollama.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "unit: fast, no external deps",
+  "integration: requires postgres/redis via testcontainers",
+  "slow: model loading, >5s",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/db/migrations/*", "app/main.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]

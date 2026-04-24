@@ -1,0 +1,56 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.tox/
+dist/
+build/
+
+# Node
+node_modules/
+.pnpm-store/
+.next/
+.vite/
+.turbo/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ML artifacts
+mlruns/
+ml/models/intent_classifier/
+ml/data/*.jsonl
+!ml/data/intents_sample.jsonl
+*.pkl
+*.onnx
+
+# Infra
+terraform.tfstate*
+.terraform/
+*.tfvars
+!*.tfvars.example
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker-volumes/
