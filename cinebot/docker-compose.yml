@@ -120,7 +120,7 @@ services:
       target: dev
     container_name: cinebot-beat
     restart: unless-stopped
-    command: celery -A app.workers.celery_app beat --loglevel=INFO
+    command: celery -A app.workers.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
     volumes:
       - ./backend/app:/app/app
     depends_on:

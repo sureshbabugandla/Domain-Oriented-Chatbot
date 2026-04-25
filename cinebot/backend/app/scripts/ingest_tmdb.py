@@ -51,8 +51,16 @@ async def _ingest_page(
     client: TMDBClient,
     db: AsyncSession,
     page: int,
-    genres_by_id: dict[int, Genre],
+    genre_ids_known: set[int],
 ) -> int:
+    """Ingest one page of popular movies into the *current* session.
+
+    NOTE — we accept a set of known genre IDs (plain ints) rather than
+    pre-loaded Genre ORM objects. ORM objects belong to a single session;
+    re-using objects from a closed session into a fresh session raises
+    InvalidRequestError. So we re-fetch the Genre rows by id in this
+    session before linking them to the movie.
+    """
     data = await client.popular_movies(page=page)
     count = 0
     for item in data["results"]:
@@ -74,12 +82,16 @@ async def _ingest_page(
         )
         merged = await db.merge(movie)
 
-        # Link genres via raw assignment (merge re-attaches the object).
-        merged.genres = [
-            genres_by_id[gid]
-            for gid in item.get("genre_ids", [])
-            if gid in genres_by_id
+        # Look up genres in THIS session — never reuse ORM objects from
+        # a different (or closed) session.
+        wanted_ids = [
+            gid for gid in item.get("genre_ids", []) if gid in genre_ids_known
         ]
+        if wanted_ids:
+            stmt = select(Genre).where(Genre.id.in_(wanted_ids))
+            merged.genres = list((await db.execute(stmt)).scalars().all())
+        else:
+            merged.genres = []
         count += 1
     await db.flush()
     return count
@@ -94,29 +106,37 @@ async def main() -> None:
     async with httpx.AsyncClient(timeout=20.0) as http:
         client = TMDBClient(http=http, api_key=settings.tmdb_api_key)
 
+        # First session: ensure genres exist. We capture only the IDs
+        # (primitive ints) to pass into per-page sessions later.
         async with SessionFactory() as db:
             genres_by_id = await _ensure_genres(client, db)
             await db.commit()
+        known_genre_ids: set[int] = set(genres_by_id.keys())
 
-            total = 0
-            for page in range(1, settings.tmdb_ingest_pages + 1):
-                try:
-                    async with SessionFactory() as page_db:
-                        n = await _ingest_page(client, page_db, page, genres_by_id)
-                        await page_db.commit()
-                        total += n
-                        log.info("page_ingested", page=page, count=n, total=total)
-                except httpx.HTTPStatusError as e:
-                    log.error("page_failed", page=page, status=e.response.status_code)
-                    if e.response.status_code == 429:  # rate limited
-                        await asyncio.sleep(5)
+        total = 0
+        for page in range(1, settings.tmdb_ingest_pages + 1):
+            try:
+                async with SessionFactory() as page_db:
+                    n = await _ingest_page(client, page_db, page, known_genre_ids)
+                    await page_db.commit()
+                    total += n
+                    log.info("page_ingested", page=page, count=n, total=total)
+            except httpx.HTTPStatusError as e:
+                log.error("page_failed", page=page, status=e.response.status_code)
+                if e.response.status_code == 429:  # rate limited
+                    await asyncio.sleep(5)
 
-            # Final report — how many need embeddings next.
-            async with SessionFactory() as post_db:
-                missing = await post_db.execute(
-                    select(Movie.id).where(Movie.embedding.is_(None))
-                )
-                log.info("ingest_complete", total=total, pending_embeddings=len(list(missing)))
+        # Final report — how many still need embeddings next.
+        async with SessionFactory() as post_db:
+            missing = await post_db.execute(
+                select(Movie.id).where(Movie.embedding.is_(None))
+            )
+            missing_count = len(list(missing))
+            log.info(
+                "ingest_complete",
+                total=total,
+                pending_embeddings=missing_count,
+            )
 
     await dispose_engine()
 

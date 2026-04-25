@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     api_host: str = "0.0.0.0"  # noqa: S104  # bind all in container
     api_port: int = 8000
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    cors_origins: str | list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     @field_validator("cors_origins", mode="before")
     @classmethod
